@@ -94,4 +94,127 @@ class ORBStrategy:
         sell_signals = (df['signal'] == -1).sum()
         
         print(f"\nSignals generated:")
-       
+        print(f"  Buy signals:  {buy_signals}")
+        print(f"  Sell signals: {sell_signals}")
+        
+        self.signals = df[df['signal'] != 0]
+        
+        return df
+    
+    def calculate_trade_levels(self, signal_type: int, 
+                               entry_price: float,
+                               range_high: float,
+                               range_low: float,
+                               range_size: float) -> Dict[str, float]:
+        """
+        Calculate entry, stop loss, and take profit levels for a trade.
+        
+        Args:
+            signal_type: 1 for buy, -1 for sell
+            entry_price: Price at which the trade is entered
+            range_high: Opening range high
+            range_low: Opening range low
+            range_size: Size of the opening range
+        
+        Returns:
+            Dictionary with 'entry', 'stop_loss', 'take_profit'
+        """
+        if signal_type == 1:  # Buy
+            stop_loss = range_low
+            take_profit = entry_price + (range_size * self.profit_target_multiplier)
+        else:  # Sell
+            stop_loss = range_high
+            take_profit = entry_price - (range_size * self.profit_target_multiplier)
+        
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+        risk_reward_ratio = reward / risk if risk > 0 else 0
+        
+        return {
+            'entry': entry_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'risk': risk,
+            'reward': reward,
+            'risk_reward_ratio': risk_reward_ratio
+        }
+    
+    def backtest_simple(self) -> Dict:
+        """
+        Simple backtest: simulate trades based on generated signals.
+        
+        Returns:
+            Dictionary with backtest results
+        """
+        df = self.generate_signals()
+        range_high, range_low, range_size = self.calculate_opening_range()
+        
+        trades = []
+        
+        for idx, row in df[df['signal'] != 0].iterrows():
+            levels = self.calculate_trade_levels(
+                row['signal'], row['close'], range_high, range_low, range_size
+            )
+            trades.append({
+                'timestamp': idx,
+                'direction': 'BUY' if row['signal'] == 1 else 'SELL',
+                **levels
+            })
+        
+        # Calculate simple statistics
+        if not trades:
+            return {'total_trades': 0}
+        
+        results = {
+            'total_trades': len(trades),
+            'buy_trades': sum(1 for t in trades if t['direction'] == 'BUY'),
+            'sell_trades': sum(1 for t in trades if t['direction'] == 'SELL'),
+            'avg_risk_reward': np.mean([t['risk_reward_ratio'] for t in trades])
+        }
+        
+        print(f"\nBacktest Results:")
+        print(f"  Total trades:    {results['total_trades']}")
+        print(f"  Buy trades:      {results['buy_trades']}")
+        print(f"  Sell trades:     {results['sell_trades']}")
+        print(f"  Avg Risk/Reward: {results['avg_risk_reward']:.2f}")
+        
+        return results
+
+
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
+if __name__ == "__main__":
+    # Create synthetic intraday data
+    np.random.seed(42)
+    n = 390  # 6.5 hours of 1-minute data (typical US session)
+    
+    dates = pd.date_range('2025-07-14 09:30', periods=n, freq='1min')
+    
+    # Simulate price movement with a breakout after 30 minutes
+    base_price = 1.10000
+    prices = base_price + np.cumsum(np.random.randn(n) * 0.0002)
+    
+    # Add a breakout move after minute 30
+    prices[30:] += 0.005  # Upward breakout
+    
+    volume = np.random.randint(1000, 5000, n)
+    volume[:15] = np.random.randint(10000, 20000, 15)  # High opening volume
+    
+    df = pd.DataFrame({
+        'open': prices,
+        'high': prices + np.abs(np.random.randn(n) * 0.0003),
+        'low': prices - np.abs(np.random.randn(n) * 0.0003),
+        'close': prices + np.random.randn(n) * 0.0001,
+        'volume': volume
+    }, index=dates)
+    
+    print("=" * 60)
+    print("CHAPTER 4: ORB STRATEGY DEMO")
+    print("=" * 60)
+    
+    # Initialize strategy
+    orb = ORBStrategy(df, opening_minutes=15, profit_target_multiplier=2.0)
+    
+    # Run backtest
+    results = orb.backtest_simple()
